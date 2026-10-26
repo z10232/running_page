@@ -15,22 +15,22 @@ const getBasePath = () => {
 };
 
 const data: ISiteMetadataResult = {
-  siteTitle: 'Running Page',
-  siteUrl: 'https://yihong.run',
-  logo: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQTtc69JxHNcmN1ETpMUX4dozAgAN6iPjWalQ&usqp=CAU',
-  description: 'Personal site and blog',
+  siteTitle: 'z10232 的跑步主页',
+  siteUrl: 'https://z10232.github.io/running_page/',
+  logo: 'https://github.com/z10232.png',
+  description: 'z10232 的 Keep 跑步记录',
   navLinks: [
     {
-      name: 'Summary',
+      name: '运动汇总',
       url: `${getBasePath()}/summary`,
     },
     {
-      name: 'Blog',
-      url: 'https://github.com/yihong0618/gitblog',
+      name: 'GitHub',
+      url: 'https://github.com/z10232',
     },
     {
-      name: 'About',
-      url: 'https://github.com/yihong0618/running_page/blob/master/README-CN.md',
+      name: '项目说明',
+      url: 'https://github.com/z10232/running_page/blob/master/README-CN.md',
     },
   ],
 };
