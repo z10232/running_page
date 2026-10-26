@@ -22,16 +22,19 @@ jobs:
           KEEP_PASSWORD: ${{ secrets.KEEP_PASSWORD }}
         run: |
           python - <<'PY'
+          import contextlib
+          import io
           import json
           import os
           import re
           import sys
           import requests
           sys.path.insert(0, 'run_page')
-          from keep_sync import login, get_to_download_runs_ids, get_single_run_data, decode_runmap_data, parse_raw_data_to_nametuple
+          from keep_sync import login, get_to_download_runs_ids, get_single_run_data, decode_runmap_data
 
           session, headers = login(requests.Session(), os.environ['KEEP_MOBILE'], os.environ['KEEP_PASSWORD'])
-          run_ids = get_to_download_runs_ids(session, headers, 'running')
+          with contextlib.redirect_stdout(io.StringIO()):
+              run_ids = get_to_download_runs_ids(session, headers, 'running')
           matches = re.compile(r'elev|altitude|ascent|climb|uphill|height|rise', re.I)
 
           def elevation_fields(value, path='data'):
@@ -40,7 +43,7 @@ jobs:
                   for key, child in value.items():
                       current = f'{path}.{key}'
                       if matches.search(key):
-                          found[current] = child if isinstance(child, (int, float, bool, type(None))) else type(child).__name__
+                          found[current] = type(child).__name__
                       if isinstance(child, (dict, list)):
                           found.update(elevation_fields(child, current))
               elif isinstance(value, list):
@@ -53,6 +56,5 @@ jobs:
               data = raw['data']
               points = decode_runmap_data(data['geoPoints'], True) if data.get('geoPoints') else []
               altitudes = [point['altitude'] for point in points if isinstance(point.get('altitude'), (int, float))]
-              parsed = parse_raw_data_to_nametuple(raw, [], [])
-              print(json.dumps({'sample': index, 'elevation_fields': elevation_fields(data), 'gps_points': len(points), 'altitude_points': len(altitudes), 'altitude_min': min(altitudes) if altitudes else None, 'altitude_max': max(altitudes) if altitudes else None, 'parsed_elevation_without_export': parsed.elevation_gain}, ensure_ascii=False))
+              print(json.dumps({'sample': index, 'field_types': elevation_fields(data), 'has_gps': bool(points), 'has_numeric_altitude': bool(altitudes)}, ensure_ascii=False))
           PY
