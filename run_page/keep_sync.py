@@ -123,7 +123,8 @@ def parse_raw_data_to_nametuple(
 
     start_time = run_data["startTime"]
     avg_heart_rate = None
-    elevation_gain = None
+    # Keep 累计爬升在没有 GPS 轨迹时也可用，0 是有效值。
+    elevation_gain = run_data.get("accumulativeUpliftedHeight")
     decoded_hr_data = []
     if run_data["heartRate"]:
         avg_heart_rate = run_data["heartRate"].get("averageHeartRate", None)
@@ -160,18 +161,19 @@ def parse_raw_data_to_nametuple(
             run_data["dataType"].startswith("outdoor")
             or run_data["dataType"] == "mountaineering"
         ):
-            if with_gpx:
+            # 旧记录缺少累计爬升时才从海拔点计算，文件导出单独控制。
+            if elevation_gain is None or with_gpx:
                 gpx_data = parse_points_to_gpx(
                     run_points_data_gpx, start_time, KEEP2STRAVA[run_data["dataType"]]
                 )
-                elevation_gain = gpx_data.get_uphill_downhill().uphill
-                if str(keep_id) not in old_gpx_ids:
+                if elevation_gain is None:
+                    elevation_gain = gpx_data.get_uphill_downhill().uphill
+                if with_gpx and str(keep_id) not in old_gpx_ids:
                     download_keep_gpx(gpx_data.to_xml(), str(keep_id))
             if with_tcx:
                 tcx_data = parse_points_to_tcx(
                     run_data, run_points_data_gpx, KEEP2TCX[run_data["dataType"]]
                 )
-                # elevation_gain = tcx_data.get_uphill_downhill().uphill
                 if str(keep_id) not in old_tcx_ids:
                     download_keep_tcx(tcx_data.toprettyxml(), str(keep_id))
     else:
