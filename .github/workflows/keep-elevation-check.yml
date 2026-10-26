@@ -1,22 +1,22 @@
-name: Check Keep Elevation
+name: Backfill Keep Elevation
 on:
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
-  diagnose:
+  backfill:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
-          persist-credentials: false
+          ref: master
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Check elevation fields without exposing credentials or raw records
+      - name: Backfill elevation while preserving other activity data
         env:
           KEEP_MOBILE: ${{ secrets.KEEP_MOBILE }}
           KEEP_PASSWORD: ${{ secrets.KEEP_PASSWORD }}
@@ -26,35 +26,46 @@ jobs:
           import io
           import json
           import os
-          import re
           import sys
-          import requests
+          from pathlib import Path
           sys.path.insert(0, 'run_page')
-          from keep_sync import login, get_to_download_runs_ids, get_single_run_data, decode_runmap_data
+          from config import JSON_FILE, SQL_FILE
+          from generator import Generator
+          from generator.db import Activity
+          from keep_sync import get_all_keep_tracks
 
-          session, headers = login(requests.Session(), os.environ['KEEP_MOBILE'], os.environ['KEEP_PASSWORD'])
+          original = json.loads(Path(JSON_FILE).read_text())
+          generator = Generator(SQL_FILE)
+          rows = generator.session.query(Activity).all()
+          existing_ids = {row.run_id for row in rows}
           with contextlib.redirect_stdout(io.StringIO()):
-              run_ids = get_to_download_runs_ids(session, headers, 'running')
-          matches = re.compile(r'elev|altitude|ascent|climb|uphill|height|rise', re.I)
-
-          def elevation_fields(value, path='data'):
-              found = {}
-              if isinstance(value, dict):
-                  for key, child in value.items():
-                      current = f'{path}.{key}'
-                      if matches.search(key):
-                          found[current] = type(child).__name__
-                      if isinstance(child, (dict, list)):
-                          found.update(elevation_fields(child, current))
-              elif isinstance(value, list):
-                  for index, child in enumerate(value[:1]):
-                      found.update(elevation_fields(child, f'{path}[{index}]'))
-              return found
-
-          for index, run_id in enumerate(run_ids[:8], 1):
-              raw = get_single_run_data(session, headers, run_id, 'running')
-              data = raw['data']
-              points = decode_runmap_data(data['geoPoints'], True) if data.get('geoPoints') else []
-              altitudes = [point['altitude'] for point in points if isinstance(point.get('altitude'), (int, float))]
-              print(json.dumps({'sample': index, 'field_types': elevation_fields(data), 'has_gps': bool(points), 'has_numeric_altitude': bool(altitudes)}, ensure_ascii=False))
+              tracks = get_all_keep_tracks(os.environ['KEEP_MOBILE'], os.environ['KEEP_PASSWORD'], [], ['running'])
+          elevations = {track.id: track.elevation_gain for track in tracks if track is not None}
+          if not existing_ids.issubset(elevations):
+              raise RuntimeError('未取得全部历史活动，停止回填。')
+          updated = []
+          for activity in original:
+              copy = dict(activity)
+              elevation = elevations[activity['run_id']]
+              copy['elevation_gain'] = float(elevation) if elevation is not None else 0.0
+              updated.append(copy)
+          for before, after in zip(original, updated, strict=True):
+              assert {key: value for key, value in before.items() if key != 'elevation_gain'} == {key: value for key, value in after.items() if key != 'elevation_gain'}
+          for row in rows:
+              elevation = elevations[row.run_id]
+              row.elevation_gain = float(elevation) if elevation is not None else 0.0
+          generator.session.commit()
+          Path(JSON_FILE).write_text(json.dumps(updated))
+          assert generator.session.query(Activity).count() == len(existing_ids)
+          generator.session.close()
+          print('累计爬升回填完成，活动数量和其他字段均已校验。')
           PY
+      - name: Commit corrected activity elevation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add run_page/data.db src/static/activities.json
+          if ! git diff --cached --quiet; then
+            git commit -m '补齐 Keep 历史跑步累计爬升'
+            git push
+          fi
