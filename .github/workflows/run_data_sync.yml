@@ -26,29 +26,31 @@ on:
 
 env:
   # please change to your own config.
-  RUN_TYPE: pass # support strava_web/strava/nike/garmin/coros/garmin_cn/garmin_sync_cn_global/keep/only_gpx/only_fit/nike_to_strava/strava_to_garmin/tcx_to_garmin/strava_to_garmin_cn/garmin_to_strava/garmin_to_strava_cn/oppo/intervals_icu/db_updater, Please change the 'pass' it to your own
-  ATHLETE: yihong0618
-  TITLE: Yihong0618 Running
+  RUN_TYPE: keep
+  ATHLETE: z10232
+  TITLE: z10232 的跑步记录
   MIN_GRID_DISTANCE: 10 # change min distance here
-  TITLE_GRID: Over 10km Runs # also here
+  TITLE_GRID: 超过 10 公里的跑步
 
   # IGNORE_BEFORE_SAVING: True # if you want to ignore some data before saving, set this to True
-  IGNORE_START_END_RANGE: 10 # Unit meter
+  IGNORE_START_END_RANGE: 0 # 已确认公开展示完整路线
   # Dont making this huge, just picking points you needing. https://developers.google.com/maps/documentation/utilities/polylineutility using this tool to making your polyline
-  IGNORE_POLYLINE: 'ktjrFoemeU~IorGq}DeB'
-  IGNORE_RANGE: 10 # Unit meter
+  IGNORE_POLYLINE: ''
+  IGNORE_RANGE: 0
   USE_CLOUDFLARE_WARP: false # If you want to use Cloudflare WARP to bypass network restrictions, set it to `true`. Currently only Garmin needs this.
   SAVE_DATA_IN_GITHUB_CACHE: false # if you deploy in the vercel, check the README
   DATA_CACHE_PREFIX: 'track_data'
   BUILD_GH_PAGES: true # If you do not need GitHub Page please set it to `false`
   SAVE_TO_PARQENT: false # If you want to save the data to the repo, set it to `true`
-  GENERATE_MONTH_OF_LIFE: true # If you want to generate the month of life, set it to `true`
-  BIRTHDAY_MONTH: 1989-03 # If you want to generate the month of life, set it to your birthday month, format is YYYY-MM
+  GENERATE_MONTH_OF_LIFE: false
 
 jobs:
   sync:
     name: Sync
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
     outputs:
       SAVE_DATA_IN_GITHUB_CACHE: ${{ steps.set_output.outputs.SAVE_DATA_IN_GITHUB_CACHE }}
       DATA_CACHE_PREFIX: ${{ steps.set_output.outputs.DATA_CACHE_PREFIX }}
@@ -60,6 +62,31 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
+
+      - name: Check Keep credentials
+        if: env.RUN_TYPE == 'keep'
+        env:
+          KEEP_MOBILE: ${{ secrets.KEEP_MOBILE }}
+          KEEP_PASSWORD: ${{ secrets.KEEP_PASSWORD }}
+        run: |
+          if [ -z "$KEEP_MOBILE" ] || [ -z "$KEEP_PASSWORD" ]; then
+            echo '请先在仓库 Secrets 中保存 KEEP_MOBILE 和 KEEP_PASSWORD。'
+            exit 1
+          fi
+
+      - name: Remove template activities before the first Keep sync
+        if: env.RUN_TYPE == 'keep'
+        shell: python
+        run: |
+          from pathlib import Path
+
+          if not Path('run_page/data.db').exists():
+              for pattern in ('year_*.svg', 'year_summary_*.svg', 'github*.svg', 'grid.svg', 'mol*.svg'):
+                  for image in Path('assets').glob(pattern):
+                      image.unlink()
+              for image in Path('PNG_OUT').glob('share_image_*.png'):
+                  image.unlink()
+              Path('src/static/activities.json').write_text('[]\n')
 
       - name: Set up Python
         id: setup_python
@@ -123,8 +150,11 @@ jobs:
 
       - name: Run sync Keep script
         if: env.RUN_TYPE == 'keep'
+        env:
+          KEEP_MOBILE: ${{ secrets.KEEP_MOBILE }}
+          KEEP_PASSWORD: ${{ secrets.KEEP_PASSWORD }}
         run: |
-          python run_page/keep_sync.py ${{ secrets.KEEP_MOBILE }} ${{ secrets.KEEP_PASSWORD }} --with-gpx
+          python run_page/keep_sync.py "$KEEP_MOBILE" "$KEEP_PASSWORD" --sync-types running
 
       - name: Run sync Coros script
         if: env.RUN_TYPE == 'coros'
@@ -287,8 +317,10 @@ jobs:
           git config --local user.email 'action@github.com'
           git config --local user.name 'GitHub Action'
           git add .
-          git commit -m 'update new runs' || echo 'nothing to commit'
-          git push || echo 'nothing to push'
+          if ! git diff --cached --quiet; then
+            git commit -m '同步 Keep 跑步记录'
+            git push
+          fi
 
       - name: Set Output
         id: set_output
@@ -304,6 +336,10 @@ jobs:
   publish_github_pages:
     if: needs.sync.result == 'success' && needs.sync.outputs.BUILD_GH_PAGES == 'true'
     name: Build and publish Github Pages
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     uses: ./.github/workflows/gh-pages.yml
     with:
       save_data_in_github_cache: ${{needs.sync.outputs.SAVE_DATA_IN_GITHUB_CACHE == 'true'}}
