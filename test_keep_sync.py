@@ -80,3 +80,32 @@ def test_keep_elevation_is_preserved_without_gps(keep_sync, run_data):
     run_data["data"]["accumulativeUpliftedHeight"] = 123.5
     activity = keep_sync.parse_raw_data_to_nametuple(run_data, [], [])
     assert activity.elevation_gain == 123.5
+
+
+def test_existing_activity_keeps_corrected_elevation_when_exported(
+    keep_sync, run_data, tmp_path
+):
+    from generator.db import Activity
+
+    run_data["data"]["accumulativeUpliftedHeight"] = 123.5
+    activity = keep_sync.parse_raw_data_to_nametuple(run_data, [], [])
+    generator = keep_sync.Generator(tmp_path / "activities.db")
+    try:
+        generator.session.add(
+            Activity(
+                run_id=activity.id,
+                distance=activity.distance,
+                elevation_gain=0.0,
+                start_date=activity.start_date,
+                start_date_local=activity.start_date_local,
+            )
+        )
+        generator.session.commit()
+        generator.sync_from_app([activity])
+        exported = generator.load()
+        assert len(exported) == 1
+        assert exported[0]["run_id"] == activity.id
+        assert exported[0]["elevation_gain"] == 123.5
+    finally:
+        generator.session.close()
+        generator.session.bind.dispose()
