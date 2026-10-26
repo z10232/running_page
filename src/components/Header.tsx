@@ -31,7 +31,7 @@ export function Header({ dark, toggleTheme, page, onNavigate }: HeaderProps) {
           title={locale === 'zh' ? '回到首页' : 'Go to home'}
           className="cursor-pointer border-0 bg-transparent p-0 text-xl font-bold text-[var(--color-text)]"
         >
-          RUNNING<span className="text-[var(--color-run)]">.</span>PAGE
+          z10232<span className="text-[var(--color-run)]"> · </span>跑步
         </button>
 
         {/* Right nav */}
@@ -111,7 +111,7 @@ export function Header({ dark, toggleTheme, page, onNavigate }: HeaderProps) {
             {locale === 'zh' ? 'EN' : '中'}
           </button>
           <a
-            href="https://github.com/yihong0618/running_page"
+            href="https://github.com/z10232/running_page"
             target="_blank"
             rel="noopener noreferrer"
             className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--color-muted)] transition-colors hover:bg-[var(--color-card)] hover:text-[var(--color-text)]"
