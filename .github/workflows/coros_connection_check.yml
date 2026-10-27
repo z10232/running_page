@@ -1,0 +1,36 @@
+name: Check COROS Connection
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt bcrypt oss2
+      - name: Verify COROS login without exposing credentials
+        env:
+          COROS_ACCOUNT: ${{ secrets.COROS_ACCOUNT }}
+          COROS_PASSWORD: ${{ secrets.COROS_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          import httpx
+          sys.path.insert(0, 'run_page')
+          from coros_client import CorosClient
+          with httpx.Client(timeout=60) as session:
+              client = CorosClient(session)
+              client.login(os.environ['COROS_ACCOUNT'], os.environ['COROS_PASSWORD'])
+              client.import_tasks()
+              client._storage_credentials()
+          print('高驰中国区手机号密码登录、导入任务查询和临时上传凭证获取均成功。')
+          PY
