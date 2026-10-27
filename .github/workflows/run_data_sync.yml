@@ -2,6 +2,11 @@ name: Run Data Sync
 
 on:
   workflow_dispatch:
+    inputs:
+      coros_sample_id:
+        description: '仅在授权验证单条历史跑步时填写 Keep ID，日常同步留空'
+        required: false
+        type: string
   schedule:
     - cron: '0 0 * * *'
   push:
@@ -15,6 +20,9 @@ on:
       - run_page/garmin_sync.py
       - run_page/coros_sync.py
       - run_page/keep_sync.py
+      - run_page/keep_to_coros_sync.py
+      - run_page/coros_client.py
+      - run_page/keep_fit.py
       - run_page/gpx_sync.py
       - run_page/tcx_sync.py
       - run_page/tcx_to_garmin_sync.py
@@ -23,6 +31,10 @@ on:
       - run_page/oppo_sync.py
       - run_page/intervals_icu_sync.py
       - requirements.txt
+
+concurrency:
+  group: keep-running-data-sync
+  cancel-in-progress: false
 
 env:
   # please change to your own config.
@@ -332,6 +344,48 @@ jobs:
           echo "SAVE_DATA_IN_GITHUB_CACHE=$SAVE_DATA_IN_GITHUB_CACHE" >> "$GITHUB_OUTPUT"
           echo "DATA_CACHE_PREFIX=$DATA_CACHE_PREFIX" >> "$GITHUB_OUTPUT"
           echo "BUILD_GH_PAGES=$BUILD_GH_PAGES" >> "$GITHUB_OUTPUT"
+
+  upload_keep_to_coros:
+    name: 上传新增 Keep 跑步到高驰
+    needs: sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: 上传新跑步并确认高驰导入结果
+        env:
+          KEEP_MOBILE: ${{ secrets.KEEP_MOBILE }}
+          KEEP_PASSWORD: ${{ secrets.KEEP_PASSWORD }}
+          COROS_ACCOUNT: ${{ secrets.COROS_ACCOUNT }}
+          COROS_PASSWORD: ${{ secrets.COROS_PASSWORD }}
+          COROS_SAMPLE_ID: ${{ inputs.coros_sample_id }}
+        run: |
+          args=()
+          if [ -n "$COROS_SAMPLE_ID" ]; then
+            args+=(--sample-id "$COROS_SAMPLE_ID")
+          fi
+          python run_page/keep_to_coros_sync.py "${args[@]}"
+      - name: 保存已完成和等待确认的高驰导入记录
+        if: always()
+        run: |
+          git config --local user.email 'action@github.com'
+          git config --local user.name 'GitHub Action'
+          git add activities/keep2coros.json
+          if ! git diff --cached --quiet; then
+            git commit -m '更新 Keep 到高驰的同步记录'
+            git pull --rebase origin master
+            git push origin HEAD:master
+          fi
 
   publish_github_pages:
     if: needs.sync.result == 'success' && needs.sync.outputs.BUILD_GH_PAGES == 'true'
