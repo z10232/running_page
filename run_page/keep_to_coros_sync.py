@@ -130,7 +130,7 @@ def _recover_task(tasks: list[dict], filename: str) -> str | None:
         if task.get("originalFilename") != filename:
             continue
         status = task.get("status")
-        if status in (0, 1, 3) or (status == 2 and task.get("errorSize") == 0):
+        if status in (0, 1, 3) or (status == 2 and not task.get("errorSize")):
             return str(task["id"])
     return None
 
@@ -144,7 +144,7 @@ def _wait_for_import(coros: CorosClient, task_id: str) -> None:
         )
         if task is not None:
             status = task.get("status")
-            if status == 2 and task.get("errorSize") == 0:
+            if status == 2 and not task.get("errorSize"):
                 return
             if status == 2 or (isinstance(status, int) and status < 0):
                 raise ImportFailed("高驰导入任务失败，下次同步将重新上传。")
