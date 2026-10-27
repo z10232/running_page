@@ -291,3 +291,22 @@ def test_safe_import_failure_reason_is_visible_without_raw_exception(
     coros.find_activity.side_effect = sync.CorosError("高驰账号需要额外验证。")
     assert sync.run_sync(object(), {}, coros, state_file) == 1
     assert "高驰账号需要额外验证。" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("error_fields", [{}, {"errorSize": None}])
+def test_completed_task_can_omit_zero_error_count(
+    sync, state_file, keep_runs, error_fields
+):
+    coros = client(sync)
+    task = {
+        "id": "task-2",
+        "status": 2,
+        "finishSize": 1,
+        "size": 1,
+        "originalFilename": "keep-2.fit",
+        **error_fields,
+    }
+    coros.import_tasks.return_value = [task]
+    assert sync.run_sync(object(), {}, coros, state_file) == 0
+    assert read_state(state_file)["uploaded"] == {"2": {"task_id": "task-2"}}
+    coros.submit_fit.assert_not_called()
