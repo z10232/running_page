@@ -31,3 +31,5 @@ duckdb
 openai==1.88.0
 # cairosvg
 certifi==2025.1.31
+bcrypt>=5.0.0,<6
+oss2>=2.19.1,<3
