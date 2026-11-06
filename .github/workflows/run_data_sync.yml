@@ -13,6 +13,7 @@ on:
     branches:
       - master
     paths:
+      - .github/workflows/run_data_sync.yml
       - run_page/nike_sync.py
       - run_page/nike_to_strava_sync.py
       - run_page/strava_sync.py
@@ -72,6 +73,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          # 数据任务从当前主分支读取数据库和高驰回执，重跑旧任务也沿用最新状态。
+          ref: master
           fetch-depth: 0
           persist-credentials: true
 
@@ -331,7 +334,8 @@ jobs:
           git add .
           if ! git diff --cached --quiet; then
             git commit -m '同步 Keep 跑步记录'
-            git push
+            git pull --rebase origin master
+            git push origin HEAD:master
           fi
 
       - name: Set Output
