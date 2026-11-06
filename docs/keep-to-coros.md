@@ -23,7 +23,9 @@
 
 ## 手动运行与单条验证
 
-在 Actions 打开 `Run Data Sync`，点击 `Run workflow`。日常运行将 `coros_sample_id` 留空。
+在 Actions 打开 `Run Data Sync`，点击 `Run workflow`，选择 `master`。日常运行将 `coros_sample_id` 留空。修复工作流后也从这里启动新任务：`Re-run jobs` 会继续使用原运行的工作流版本。
+
+数据采集会检出当前 `master` 的数据库和高驰回执；保存新跑步时先合入远端后续提交，再写回 `master`，保留期间已保存的高驰成功记录。
 
 获得明确授权后，可在 `coros_sample_id` 填入一条 Keep 数字 ID 来验证历史活动。这次只处理该条，不补传其他历史记录；成功后也会写入清单，再次运行会跳过它。
 
