@@ -1,0 +1,89 @@
+name: Verify RUNALYZE Import
+on:
+  workflow_dispatch:
+concurrency:
+  group: keep-running-data-sync
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: 验证一条授权历史跑步的上传与处理状态
+        env:
+          KEEP_MOBILE: ${{ secrets.KEEP_MOBILE }}
+          KEEP_PASSWORD: ${{ secrets.KEEP_PASSWORD }}
+          RUNALYZE_API_TOKEN: ${{ secrets.RUNALYZE_API_TOKEN }}
+        run: |
+          python -u - <<'PY'
+          import hashlib,json,os,sys,time
+          from pathlib import Path
+          import httpx,requests
+          sys.path.insert(0,'run_page')
+          from keep_sync import login,get_to_download_runs_ids,get_single_run_data
+          from keep_fit import build_keep_fit
+          path=Path('activities/keep2runalyze.json')
+          state=json.loads(path.read_text())
+          keep_id='9223370242749072807'
+          try:
+              with requests.Session() as keep, httpx.Client(timeout=60) as api:
+                  token=os.environ['RUNALYZE_API_TOKEN']
+                  headers={'token':token}
+                  ping=api.get('https://runalyze.com/api/v1/ping',headers=headers)
+                  print('个人 API 认证检查 HTTP:',ping.status_code)
+                  assert ping.status_code==200
+                  keep,keep_headers=login(keep,os.environ['KEEP_MOBILE'],os.environ['KEEP_PASSWORD'])
+                  run=next(value for value in get_to_download_runs_ids(keep,keep_headers,'running') if value.split('_')[1]==keep_id)
+                  activity=get_single_run_data(keep,keep_headers,run,'running')['data']
+                  content=build_keep_fit(activity)
+                  response=api.post('https://runalyze.com/api/v1/activities/uploads',headers=headers,files={'file':(f'keep-{keep_id}.fit',content,'application/octet-stream')})
+                  print('上传 HTTP:',response.status_code)
+                  assert response.status_code==201
+                  payload=response.json()
+                  print('接收响应字段类型:',{key:type(value).__name__ for key,value in payload.items()})
+                  queue_id=payload.get('id') or payload.get('queue_id')
+                  receipt={'sha256':hashlib.sha256(content).hexdigest(),'http_status':201}
+                  state.setdefault('pending',{})[keep_id]={**receipt,'queue_id':queue_id}
+                  path.write_text(json.dumps(state,indent=2)+'\n')
+                  assert queue_id
+                  for attempt in range(25):
+                      response=api.get(f'https://runalyze.com/api/v1/activities/uploads/{queue_id}',headers=headers)
+                      print('处理查询 HTTP:',response.status_code)
+                      response.raise_for_status()
+                      payload=response.json()
+                      print('处理响应字段类型:',{key:type(value).__name__ for key,value in payload.items()})
+                      print('处理状态:',{key:value for key,value in payload.items() if key in ('status','state')})
+                      print('是否返回活动编号:',bool(payload.get('activity_id')))
+                      if payload.get('activity_id'):
+                          state['accepted'][keep_id]={**receipt,'queue_id':queue_id,'activity_id':payload['activity_id']}
+                          state['pending'].pop(keep_id,None)
+                          path.write_text(json.dumps(state,indent=2)+'\n')
+                          print('样例已确认入库；回执已保存。')
+                          break
+                      time.sleep(5)
+          except Exception:
+              print('验证未完成，未输出原始响应、详情或异常。')
+              raise SystemExit(1)
+          PY
+      - name: 保存样例回执
+        if: always()
+        run: |
+          git config user.name 'GitHub Action'
+          git config user.email 'action@github.com'
+          git add activities/keep2runalyze.json
+          if ! git diff --cached --quiet; then
+            git commit -m '保存 RUNALYZE 单条历史验证回执'
+            git pull --rebase origin master
+            git push origin HEAD:master
+          fi
