@@ -1,6 +1,7 @@
 """RUNALYZE 免费个人 API 的文件提交与导入确认。"""
 
 import hashlib
+import time
 
 import httpx
 
@@ -17,15 +18,24 @@ class RunalyzeClient:
         self.token = token
 
     def _request(self, method: str, path: str, expected_status: int, **kwargs):
-        try:
-            response = self.session.request(
-                method,
-                API_URL + path,
-                headers={"token": self.token},
-                **kwargs,
-            )
-        except httpx.HTTPError:
-            raise RunalyzeError("RUNALYZE 连接未完成，请稍后重新运行。") from None
+        # 实际批量导入出现过查询超时。只读请求可以重试，上传请求保持单次提交。
+        attempts = 2 if method == "GET" else 1
+        for attempt in range(attempts):
+            try:
+                response = self.session.request(
+                    method,
+                    API_URL + path,
+                    headers={"token": self.token},
+                    **kwargs,
+                )
+                break
+            except httpx.HTTPError as error:
+                if attempt + 1 == attempts:
+                    raise RunalyzeError(
+                        f"RUNALYZE {method} 连接未完成（{type(error).__name__}），请稍后重新运行。"
+                    ) from None
+                print("RUNALYZE 查询连接暂未完成，3 秒后重试一次。")
+                time.sleep(3)
         if response.status_code in (401, 403):
             raise RunalyzeError(
                 "RUNALYZE Token 无效、已过期或缺少 Activity → Write (File) 权限。"
