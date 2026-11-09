@@ -132,3 +132,44 @@ def test_network_exception_is_safe_for_public_logs(api):
         api.RunalyzeClient(session, "secret-example").upload_fit("keep-123.fit", b"fit")
     assert "private-exception-value" not in str(error.value)
     assert "secret-example" not in str(error.value)
+
+
+def test_read_timeout_retries_queue_query_without_reuploading(api, monkeypatch):
+    calls = []
+    monkeypatch.setattr("time.sleep", lambda _: None)
+
+    def handle(request):
+        calls.append(request.method)
+        if len(calls) == 1:
+            raise httpx.ReadTimeout("private-timeout", request=request)
+        return httpx.Response(200, json={"queue_id": 123, "activity_id": 456})
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as session:
+        status = api.RunalyzeClient(session, "example").get_import_status(123)
+    assert status["activity_id"] == 456
+    assert calls == ["GET", "GET"]
+
+
+@pytest.mark.parametrize("method,expected_calls", [("GET", 2), ("POST", 1)])
+def test_network_recovery_is_bounded_and_never_retries_upload(
+    api, monkeypatch, method, expected_calls
+):
+    calls = []
+    monkeypatch.setattr("time.sleep", lambda _: None)
+
+    def handle(request):
+        calls.append(request.method)
+        raise httpx.ReadTimeout("private-timeout", request=request)
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handle)) as session,
+        pytest.raises(api.RunalyzeError) as error,
+    ):
+        client = api.RunalyzeClient(session, "secret-example")
+        if method == "GET":
+            client.get_import_status(123)
+        else:
+            client.upload_fit("keep.fit", b"fit")
+    assert calls == [method] * expected_calls
+    assert "private-timeout" not in str(error.value)
+    assert "secret-example" not in str(error.value)
