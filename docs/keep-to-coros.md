@@ -1,3 +1,5 @@
+> 2026-11-09 已将此个人主页的自动上传目标切换至 RUNALYZE。当前配置见 [Keep 到 RUNALYZE](keep-to-runalyze.md)。高驰历史回执保留在 `activities/keep2coros.json`。
+
 # Keep 新增跑步同步到高驰
 
 每天北京时间 08:00，`Run Data Sync` 先同步 Keep 到个人主页，随后独立把新增跑步上传到高驰中国训练平台。高驰上传失败会使该任务显示失败；主页仍独立发布。
