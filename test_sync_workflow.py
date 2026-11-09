@@ -1,4 +1,4 @@
-"""用真实 Git 仓库验证同步任务写回数据及保留高驰回执的行为。"""
+"""用真实 Git 仓库验证同步任务写回数据及保留平台回执的行为。"""
 
 import json
 import subprocess
@@ -73,17 +73,20 @@ def publish_runs(worker):
 
 
 @pytest.mark.parametrize("detached", [False, True])
-def test_publish_keeps_remote_receipts_when_remote_advances(repositories, detached):
+@pytest.mark.parametrize("platform", ["coros", "runalyze"])
+def test_publish_keeps_remote_receipts_when_remote_advances(
+    repositories, detached, platform
+):
     remote, author, worker = repositories
     if detached:
         git(worker, "checkout", "--detach", "HEAD")
-    # 任务采集期间，远端已有后续高驰回执；同步只写自己的跑步数据。
+    # 任务采集期间，远端已有后续平台回执；同步只写自己的跑步数据。
     write_json(
         author,
-        "activities/keep2coros.json",
+        f"activities/keep2{platform}.json",
         {"uploaded": ["existing-run", "later-receipt"]},
     )
-    commit(author, "保存高驰成功回执")
+    commit(author, "保存平台成功回执")
     git(author, "push", "origin", "master")
     write_json(worker, "src/static/activities.json", ["existing-run", "new-run"])
 
@@ -94,9 +97,9 @@ def test_publish_keeps_remote_receipts_when_remote_advances(repositories, detach
         "existing-run",
         "new-run",
     ]
-    assert json.loads(git(remote, "show", "master:activities/keep2coros.json")) == {
-        "uploaded": ["existing-run", "later-receipt"]
-    }
+    assert json.loads(
+        git(remote, "show", f"master:activities/keep2{platform}.json")
+    ) == {"uploaded": ["existing-run", "later-receipt"]}
     assert git(worker, "status", "--porcelain") == ""
 
 
