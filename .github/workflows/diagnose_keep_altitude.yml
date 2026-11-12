@@ -35,7 +35,7 @@ jobs:
           import requests
           
           sys.path.insert(0, str(Path.cwd() / 'run_page'))
-          from keep_sync import get_single_run_data, get_to_download_runs_ids, login
+          from keep_sync import decode_runmap_data, get_single_run_data, get_to_download_runs_ids, login
           
           KEEP_ID = '9223370242749072807'
           GRAPH_API = 'https://api.gotokeep.com/minnow-webapp/v1/sportlog/sportData/chart/{log_id}'
@@ -83,31 +83,29 @@ jobs:
                   detail = response['data']
                   print('详情字段结构:', json.dumps(shape(detail), ensure_ascii=False))
                   print('海拔相关字段结构:', json.dumps(altitude_fields(detail), ensure_ascii=False))
-                  raw_url = detail.get('rawDataURL')
-                  if raw_url:
-                      parsed = urlsplit(raw_url)
-                      print('原始数据来源主机:', parsed.hostname)
-                      if parsed.scheme != 'https':
-                          print('原始数据未使用HTTPS，停止。')
-                          return 1
-                      response = session.get(raw_url, timeout=45)
-                      print('原始数据 HTTP:', response.status_code)
-                      print('原始数据内容类型:', response.headers.get('Content-Type', '').split(';')[0])
-                      print('原始数据字节数:', len(response.content))
-                      response.raise_for_status()
-                      body = response.content
-                      if body.startswith(b'\x1f\x8b'):
-                          body = gzip.decompress(body)
-                      raw = json.loads(body)
-                      print('原始数据结构:', json.dumps(shape(raw), ensure_ascii=False))
-                      print('原始海拔字段结构:', json.dumps(altitude_fields(raw), ensure_ascii=False))
-                  for graph_id, label in ((KEEP_ID, '数字ID'), (run_id, '完整ID')):
-                      response = session.get(GRAPH_API.format(log_id=graph_id), headers=headers,
-                                             params={'itemCount': 1000}, timeout=45)
-                      print('独立图表接口', label, 'HTTP:', response.status_code)
-                      payload = response.json()
-                      print('图表接口结构:', json.dumps(shape(payload), ensure_ascii=False))
-                      print('图表海拔字段结构:', json.dumps(altitude_fields(payload), ensure_ascii=False))
+                  response = session.get(GRAPH_API.format(log_id=run_id), headers=headers,
+                                         params={'itemCount': 1000}, timeout=45)
+                  print('独立图表接口 HTTP:', response.status_code)
+                  response.raise_for_status()
+                  charts = response.json()['data']['charts']
+                  for chart in charts:
+                      metadata = {key: chart.get(key) for key in ('title','chartMetaType','unit','chartType','gridType')}
+                      print('图表元数据:', json.dumps(metadata, ensure_ascii=False))
+                      encoded = chart.get('chartData')
+                      if not encoded:
+                          continue
+                      try:
+                          decoded = decode_runmap_data(encoded)
+                      except Exception as error:
+                          print('图表解码失败类型:', type(error).__name__)
+                          continue
+                      print('图表采样结构:', json.dumps(shape(decoded), ensure_ascii=False))
+                      if isinstance(decoded, list):
+                          numeric = lambda value: isinstance(value,(int,float)) and not isinstance(value,bool)
+                          points = [point for point in decoded if isinstance(point,dict)]
+                          print('采样字段有效数量:', json.dumps({key:sum(numeric(point.get(key)) for point in points) for key in ('x','y','min','max')}))
+                          ranged = [point for point in points if all(numeric(point.get(key)) for key in ('y','min','max'))]
+                          print('采样数值语义检查:', json.dumps({'y_all_zero': bool(points) and all(point.get('y') == 0 for point in points), 'y_always_in_range': bool(ranged) and all(point['min']<=point['y']<=point['max'] for point in ranged), 'range_all_equal': bool(ranged) and all(point['min']==point['max'] for point in ranged)}))
               return 0
           
           
