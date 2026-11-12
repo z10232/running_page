@@ -1,0 +1,103 @@
+name: Diagnose Keep Altitude
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: 读取11月8日独立海拔数据结构
+        env:
+          KEEP_MOBILE: ${{ secrets.KEEP_MOBILE }}
+          KEEP_PASSWORD: ${{ secrets.KEEP_PASSWORD }}
+        run: |
+          python -u - <<'PY'
+          """单条 Keep 记录的结构诊断，只输出字段类型及数量。"""
+          
+          import json
+          import os
+          import re
+          import sys
+          from pathlib import Path
+          
+          import requests
+          
+          sys.path.insert(0, str(Path.cwd() / 'run_page'))
+          from keep_sync import get_single_run_data, get_to_download_runs_ids, login
+          
+          KEEP_ID = '9223370242749072807'
+          GRAPH_API = 'https://api.gotokeep.com/minnow-webapp/v1/sportlog/sportData/chart/{log_id}'
+          ALTITUDE_KEY = re.compile('altitude|elevation|height|uphill|downhill|climb', re.I)
+          
+          
+          def shape(value, depth=0):
+              result = {'type': type(value).__name__}
+              if isinstance(value, (str, list, dict)):
+                  result['length'] = len(value)
+              if isinstance(value, dict):
+                  result['keys'] = sorted(value)
+                  if depth < 5:
+                      result['fields'] = {key: shape(child, depth + 1) for key, child in value.items()}
+              elif isinstance(value, list) and value and depth < 5:
+                  result['first_item'] = shape(value[0], depth + 1)
+              return result
+          
+          
+          def altitude_fields(value, path='data'):
+              result = {}
+              if isinstance(value, dict):
+                  for key, child in value.items():
+                      child_path = path + '.' + key
+                      if ALTITUDE_KEY.search(key):
+                          result[child_path] = shape(child)
+                      if isinstance(child, dict):
+                          result.update(altitude_fields(child, child_path))
+              return result
+          
+          
+          def main():
+              with requests.Session() as session:
+                  logged_in = login(session, os.environ['KEEP_MOBILE'], os.environ['KEEP_PASSWORD'])
+                  if not logged_in:
+                      print('Keep 登录未成功。')
+                      return 1
+                  session, headers = logged_in
+                  runs = get_to_download_runs_ids(session, headers, 'running')
+                  run_id = next(run for run in runs if run.split('_')[1] == KEEP_ID)
+                  response = get_single_run_data(session, headers, run_id, 'running')
+                  if not response or not isinstance(response.get('data'), dict):
+                      print('未取得活动详情。')
+                      return 1
+                  detail = response['data']
+                  print('详情字段结构:', json.dumps(shape(detail), ensure_ascii=False))
+                  print('海拔相关字段结构:', json.dumps(altitude_fields(detail), ensure_ascii=False))
+                  response = session.get(GRAPH_API.format(log_id=KEEP_ID), headers=headers,
+                                         params={'itemCount': 1000}, timeout=45)
+                  print('独立图表接口 HTTP:', response.status_code)
+                  if response.status_code != 200:
+                      return 1
+                  payload = response.json()
+                  print('图表接口结构:', json.dumps(shape(payload), ensure_ascii=False))
+                  print('图表海拔字段结构:', json.dumps(altitude_fields(payload), ensure_ascii=False))
+              return 0
+          
+          
+          if __name__ == '__main__':
+              try:
+                  result = main()
+              except Exception as error:
+                  # 不记录异常文本、HTTP响应或认证信息。
+                  print('诊断未完成，异常类型:', type(error).__name__)
+                  result = 1
+              raise SystemExit(result)
+          PY
