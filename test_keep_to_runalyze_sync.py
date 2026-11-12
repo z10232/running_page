@@ -34,8 +34,9 @@ def keep_runs(sync, monkeypatch):
     )
     monkeypatch.setattr(sync, "get_single_run_data", fetch)
     monkeypatch.setattr(
-        sync, "build_keep_fit", lambda data: b"fit:" + data["id"].encode()
+        sync, "build_keep_fit", lambda data, **kwargs: b"fit:" + data["id"].encode()
     )
+    monkeypatch.setattr(sync, "get_keep_altitude_points", Mock(return_value=[]))
     monkeypatch.setattr(sync.time, "sleep", Mock())
     return fetch
 
@@ -386,3 +387,61 @@ def test_unconfirmed_or_incomplete_receipt_cannot_silently_skip_or_repeat_upload
     runalyze.upload_fit.assert_not_called()
     runalyze.get_import_status.assert_not_called()
     keep_runs.assert_not_called()
+
+
+def test_no_gps_run_uploads_independent_altitude_curve_in_the_fit(
+    sync, state_file, keep_runs, monkeypatch
+):
+    from fit_tool.data_message import DataMessage
+    from fit_tool.fit_file import FitFile
+    from keep_fit import build_keep_fit
+
+    activity = {
+        "id": "user_1_rn",
+        "dataType": "outdoorRunning",
+        "startTime": 1700000000000,
+        "endTime": 1700000060000,
+        "duration": 60,
+        "distance": 200,
+        "accumulativeUpliftedHeight": 30,
+        "heartRate": None,
+        "geoPoints": "",
+    }
+    keep_runs.side_effect = None
+    keep_runs.return_value = {"data": activity}
+    altitude = Mock(
+        return_value=[
+            {"timestamp": 50, "altitude": 100},
+            {"timestamp": 150, "altitude": 90},
+        ]
+    )
+    monkeypatch.setattr(sync, "get_keep_altitude_points", altitude, raising=False)
+    monkeypatch.setattr(sync, "build_keep_fit", build_keep_fit)
+    runalyze = client()
+    session = object()
+    headers = {"Authorization": "test-auth"}
+
+    assert sync.run_sync(session, headers, runalyze, state_file, sample_id="1") == 0
+    altitude.assert_called_once_with(session, headers, "user_1_rn")
+    fit = FitFile.from_bytes(runalyze.upload_fit.call_args.args[1])
+    records = [
+        record.message
+        for record in fit.records
+        if isinstance(record.message, DataMessage) and record.message.name == "record"
+    ]
+    assert [record.altitude for record in records] == [100, 90]
+    assert all(
+        record.position_lat is None and record.position_long is None
+        for record in records
+    )
+
+
+def test_altitude_fetch_failure_is_retried_next_run_instead_of_uploading_without_it(
+    sync, state_file, keep_runs, monkeypatch, capsys
+):
+    altitude = Mock(side_effect=[RuntimeError("private-server-value"), []])
+    monkeypatch.setattr(sync, "get_keep_altitude_points", altitude, raising=False)
+    runalyze = client()
+    assert sync.run_sync(object(), {}, runalyze, state_file) == 1
+    assert set(read_state(state_file)["accepted"]) == {"2"}
+    assert "private-server-value" not in capsys.readouterr().out

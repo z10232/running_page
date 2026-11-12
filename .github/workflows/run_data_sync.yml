@@ -24,6 +24,7 @@ on:
       - run_page/keep_to_runalyze_sync.py
       - run_page/runalyze_client.py
       - run_page/keep_fit.py
+      - run_page/keep_altitude.py
       - run_page/gpx_sync.py
       - run_page/tcx_sync.py
       - run_page/tcx_to_garmin_sync.py

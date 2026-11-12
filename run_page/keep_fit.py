@@ -26,7 +26,9 @@ from keep_sync import (
 )
 
 
-def build_keep_fit(activity: dict) -> bytes:
+def build_keep_fit(
+    activity: dict, *, altitude_points: list[dict] | None = None
+) -> bytes:
     """接收 Keep 详情的 data 对象；缺失的测量值保持缺失，0 爬升有效。"""
     start_ms = activity["startTime"]
     end_ms = activity["endTime"]
@@ -35,7 +37,7 @@ def build_keep_fit(activity: dict) -> bytes:
         if activity["dataType"] == "indoorRunning"
         else SubSport.GENERIC
     )
-    records = _build_records(activity)
+    records = _build_records(activity, altitude_points)
 
     file_id = FileIdMessage()
     file_id.type = FileType.ACTIVITY
@@ -106,7 +108,9 @@ def _timer_event(timestamp_ms: int, event_type: EventType) -> EventMessage:
     return event
 
 
-def _build_records(activity: dict) -> list[RecordMessage]:
+def _build_records(
+    activity: dict, altitude_points: list[dict] | None
+) -> list[RecordMessage]:
     records: dict[int, RecordMessage] = {}
     if activity.get("geoPoints"):
         points = decode_runmap_data(activity["geoPoints"], is_geo=True)
@@ -126,6 +130,16 @@ def _build_records(activity: dict) -> list[RecordMessage]:
                 record.enhanced_altitude = point["altitude"]
             if point.get("currentTotalDistance") is not None:
                 record.distance = point["currentTotalDistance"]
+
+    # 独立海拔图没有经纬度；补齐高度时保留轨迹已有的测量值。
+    for point in altitude_points or []:
+        altitude = point.get("altitude")
+        if altitude is None:
+            continue
+        record = _sample_record(records, point, activity["startTime"])
+        if record is not None and record.altitude is None:
+            record.altitude = altitude
+            record.enhanced_altitude = altitude
 
     heart_rates = (activity.get("heartRate") or {}).get("heartRates")
     if heart_rates:

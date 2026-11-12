@@ -297,3 +297,61 @@ def test_rebuilding_the_same_activity_produces_identical_fit_bytes(
     assert keep_fit.build_keep_fit(activity) == keep_fit.build_keep_fit(
         deepcopy(activity)
     )
+
+
+def test_independent_altitude_chart_preserves_heights_without_inventing_a_route(
+    keep_fit, activity, monkeypatch
+):
+    heart_rates = [{"timestamp": 50, "beatsPerMinute": 150}]
+    install_samples(keep_fit, monkeypatch, activity, heart_rates=heart_rates)
+    altitude_points = [
+        {"timestamp": 0, "altitude": 0.0},
+        {"timestamp": 100, "altitude": 15.2},
+        {"timestamp": 200, "altitude": 3.0},
+    ]
+    original = deepcopy(altitude_points)
+
+    content = keep_fit.build_keep_fit(activity, altitude_points=altitude_points)
+    messages = decode_fit(content)
+    records = messages["record"]
+    assert altitude_points == original
+    assert [record.timestamp for record in records] == [
+        activity["startTime"] + offset for offset in (0, 5000, 10000, 20000)
+    ]
+    assert [
+        record.altitude for record in records if record.altitude is not None
+    ] == pytest.approx([0.0, 15.2, 3.0], abs=0.1)
+    assert records[1].altitude is None
+    assert records[1].heart_rate == 150
+    assert all(
+        record.position_lat is None and record.position_long is None
+        for record in records
+    )
+    # 官方爬升保持原口径，下降交给 RUNALYZE 按已补齐的海拔曲线计算。
+    assert messages["session"][0].total_ascent == pytest.approx(12.4, abs=0.5)
+    assert messages["session"][0].total_descent is None
+    decoded, errors = Decoder(Stream.from_byte_array(bytearray(content))).read()
+    assert not errors
+    heights = [
+        record["altitude"] for record in decoded["record_mesgs"] if "altitude" in record
+    ]
+    assert heights == pytest.approx([0.0, 15.2, 3.0], abs=0.1)
+
+
+def test_chart_altitude_merges_with_heart_rate_at_the_same_real_time(
+    keep_fit, activity, monkeypatch
+):
+    install_samples(
+        keep_fit,
+        monkeypatch,
+        activity,
+        heart_rates=[{"timestamp": 0, "beatsPerMinute": 150}],
+    )
+    messages = decode_fit(
+        keep_fit.build_keep_fit(
+            activity, altitude_points=[{"timestamp": 0, "altitude": 0}]
+        )
+    )
+    assert len(messages["record"]) == 1
+    assert messages["record"][0].heart_rate == 150
+    assert messages["record"][0].altitude == 0

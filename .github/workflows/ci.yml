@@ -33,7 +33,7 @@ jobs:
           python run_page/gpx_sync.py
 
       - name: 验证 Keep 解析与平台同步
-        run: pytest test_keep_sync.py test_coros_client.py test_keep_fit.py test_keep_to_coros_sync.py test_sync_workflow.py test_runalyze_client.py test_keep_to_runalyze_sync.py -q
+        run: pytest test_keep_sync.py test_coros_client.py test_keep_fit.py test_keep_altitude.py test_keep_to_coros_sync.py test_sync_workflow.py test_runalyze_client.py test_keep_to_runalyze_sync.py -q
 
       - name: Check formatting (black)
         run: black . --diff --color && black . --check

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import httpx
 import requests
+from keep_altitude import get_keep_altitude_points
 from keep_fit import build_keep_fit
 from keep_sync import get_single_run_data, get_to_download_runs_ids, login
 from runalyze_client import RunalyzeClient, RunalyzeError
@@ -169,7 +170,11 @@ def _prepare_fit(
     response = get_single_run_data(keep_session, keep_headers, run_id, "running")
     if not response or not response.get("data"):
         raise SyncError("没有取得 Keep 跑步详情。")
-    return build_keep_fit(response["data"])
+    activity = response["data"]
+    altitude_points = []
+    if not activity.get("geoPoints"):
+        altitude_points = get_keep_altitude_points(keep_session, keep_headers, run_id)
+    return build_keep_fit(activity, altitude_points=altitude_points)
 
 
 def _numeric_keep_id(value: str) -> str:
