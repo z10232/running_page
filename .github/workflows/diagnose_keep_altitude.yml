@@ -1,123 +1,122 @@
-name: Diagnose Keep Altitude
+name: Repair Keep Altitude
 on:
   workflow_dispatch:
+concurrency:
+  group: keep-running-data-sync
+  cancel-in-progress: false
 permissions:
-  contents: read
+  contents: write
 jobs:
-  inspect:
+  repair:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           ref: master
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
       - run: pip install -r requirements.txt
-      - name: 读取11月8日独立海拔数据结构
+      - name: 补充11月8日原活动的独立海拔曲线
         env:
           KEEP_MOBILE: ${{ secrets.KEEP_MOBILE }}
           KEEP_PASSWORD: ${{ secrets.KEEP_PASSWORD }}
+          RUNALYZE_API_TOKEN: ${{ secrets.RUNALYZE_API_TOKEN }}
         run: |
           python -u - <<'PY'
-          """单条 Keep 记录的结构诊断，只输出字段类型及数量。"""
-          
-          import gzip
-          import json
+          """只补一条已存在活动的海拔；保留原活动编号，保存待确认回执。"""
+          import hashlib
           import os
-          import re
           import sys
-          from urllib.parse import urlsplit
+          import time
           from pathlib import Path
           
+          import httpx
           import requests
+          from garmin_fit_sdk import Decoder, Stream
           
-          sys.path.insert(0, str(Path.cwd() / 'run_page'))
-          from keep_sync import decode_runmap_data, get_single_run_data, get_to_download_runs_ids, login
+          sys.path.insert(0, 'run_page')
+          from keep_sync import get_to_download_runs_ids, login
+          from keep_to_runalyze_sync import _load_manifest, _prepare_fit, _save_manifest
+          from runalyze_client import RunalyzeClient, RunalyzeError
           
           KEEP_ID = '9223370242749072807'
-          GRAPH_API = 'https://api.gotokeep.com/minnow-webapp/v1/sportlog/sportData/chart/{log_id}'
-          ALTITUDE_KEY = re.compile('altitude|elevation|height|uphill|downhill|climb', re.I)
-          
-          
-          def shape(value, depth=0):
-              result = {'type': type(value).__name__}
-              if isinstance(value, (str, list, dict)):
-                  result['length'] = len(value)
-              if isinstance(value, dict):
-                  result['keys'] = sorted(value)
-                  if depth < 5:
-                      result['fields'] = {key: shape(child, depth + 1) for key, child in value.items()}
-              elif isinstance(value, list) and value and depth < 5:
-                  result['first_item'] = shape(value[0], depth + 1)
-              return result
-          
-          
-          def altitude_fields(value, path='data'):
-              result = {}
-              if isinstance(value, dict):
-                  for key, child in value.items():
-                      child_path = path + '.' + key
-                      if ALTITUDE_KEY.search(key):
-                          result[child_path] = shape(child)
-                      if isinstance(child, dict):
-                          result.update(altitude_fields(child, child_path))
-              return result
+          MANIFEST = Path('activities/keep2runalyze.json')
           
           
           def main():
-              with requests.Session() as session:
-                  logged_in = login(session, os.environ['KEEP_MOBILE'], os.environ['KEEP_PASSWORD'])
-                  if not logged_in:
-                      print('Keep 登录未成功。')
-                      return 1
-                  session, headers = logged_in
-                  runs = get_to_download_runs_ids(session, headers, 'running')
-                  run_id = next(run for run in runs if run.split('_')[1] == KEEP_ID)
-                  response = get_single_run_data(session, headers, run_id, 'running')
-                  if not response or not isinstance(response.get('data'), dict):
-                      print('未取得活动详情。')
-                      return 1
-                  detail = response['data']
-                  print('详情字段结构:', json.dumps(shape(detail), ensure_ascii=False))
-                  print('海拔相关字段结构:', json.dumps(altitude_fields(detail), ensure_ascii=False))
-                  response = session.get(GRAPH_API.format(log_id=run_id), headers=headers,
-                                         params={'itemCount': 1000}, timeout=45)
-                  print('独立图表接口 HTTP:', response.status_code)
-                  response.raise_for_status()
-                  charts = response.json()['data']['charts']
-                  chart = next(c for c in charts if c.get('chartMetaType')=='upliftedHeight')
-                  points = decode_runmap_data(chart['chartData'])
-                  xs = [point['x'] for point in points]
-                  ys = [point['y'] for point in points]
-                  baseline = detail.get('baselineAltitude')
-                  elapsed = (detail['endTime']-detail['startTime'])/1000
-                  checks = {
-                      'x_starts_at_zero':xs[0]==0,
-                      'x_sorted':xs==sorted(xs),
-                      'x_within_elapsed_seconds':all(0<=x<=elapsed for x in xs),
-                      'last_x_within_15_seconds_of_end':abs(elapsed-xs[-1])<=15,
-                      'height_has_rise':any(b>a for a,b in zip(ys,ys[1:])),
-                      'height_has_fall':any(b<a for a,b in zip(ys,ys[1:])),
-                      'first_y_near_zero':abs(ys[0])<1,
-                      'first_y_near_baseline':baseline is not None and abs(ys[0]-baseline)<1,
-                      'baseline_near_zero':baseline is not None and abs(baseline)<1,
-                      'fit_altitude_range_valid':all(-500<=y<=10000 for y in ys),
-                      'min_max_all_zero':all(p['min']==p['max']==0 for p in points),
-                  }
-                  print('海拔时间与高度语义:',json.dumps(checks,ensure_ascii=False))
-                  print('海拔统计标签:',json.dumps([item.get('label') for key in ('briefLeftNums','briefRightNums','briefNums','flowerBriefNums') for item in (chart.get(key) or []) if isinstance(item,dict)],ensure_ascii=False))
-              return 0
+              manifest = _load_manifest(MANIFEST)
+              original = manifest['accepted'][KEEP_ID]
+              expected_id = original['activity_id']
+              assert expected_id == 222476581
+              with requests.Session() as keep, httpx.Client(timeout=60) as api:
+                  result = login(keep, os.environ['KEEP_MOBILE'], os.environ['KEEP_PASSWORD'])
+                  if not result:
+                      raise ValueError('Keep login failed')
+                  keep, headers = result
+                  run_id = next(run for run in get_to_download_runs_ids(keep, headers, 'running') if run.split('_')[1] == KEEP_ID)
+                  content = _prepare_fit(keep, headers, run_id)
+                  decoded, errors = Decoder(Stream.from_byte_array(bytearray(content))).read()
+                  assert not errors
+                  records = decoded['record_mesgs']
+                  heights = [r.get('enhanced_altitude', r.get('altitude')) for r in records if r.get('enhanced_altitude', r.get('altitude')) is not None]
+                  print('修正版文件海拔点数量:', len(heights))
+                  print('修正版文件包含下降变化:', any(b<a for a,b in zip(heights, heights[1:])))
+                  print('修正版文件包含GPS坐标:', any('position_lat' in r or 'position_long' in r for r in records))
+                  assert len(heights) > 1 and any(b<a for a,b in zip(heights, heights[1:]))
+                  assert not any('position_lat' in r or 'position_long' in r for r in records)
+                  digest = hashlib.sha256(content).hexdigest()
+                  if original.get('sha256') == digest and not original.get('pending_altitude_repair'):
+                      print('修正版文件已确认过，本轮不再上传。')
+                      return 0
+                  runalyze = RunalyzeClient(api, os.environ['RUNALYZE_API_TOKEN'])
+                  runalyze.ping()
+                  pending = original.get('pending_altitude_repair')
+                  if not pending:
+                      pending = runalyze.upload_fit(f'keep-{KEEP_ID}.fit', content)
+                      original['pending_altitude_repair'] = pending
+                      _save_manifest(MANIFEST, manifest)
+                      print('单条修正版文件已接收，队列编号已保存。')
+                  else:
+                      print('恢复已保存的单条修复队列，不重复上传。')
+                  for _ in range(30):
+                      status = runalyze.get_import_status(pending['queue_id'])
+                      if status.get('activity_id'):
+                          if status['activity_id'] != expected_id:
+                              print('返回活动编号与原活动不同，未认定原记录已补齐。')
+                              return 1
+                          manifest['accepted'][KEEP_ID] = {**pending, 'activity_id': expected_id}
+                          _save_manifest(MANIFEST, manifest)
+                          print('修正版文件已处理，活动编号与原记录一致。')
+                          print('下降显示值仍需在RUNALYZE活动页面核对。')
+                          return 0
+                      time.sleep(5)
+                  print('单条修复尚未确认，队列回执保留，后续先查询原队列。')
+                  return 1
           
           
           if __name__ == '__main__':
               try:
                   result = main()
+              except RunalyzeError as error:
+                  print(str(error))
+                  result = 1
               except Exception as error:
-                  # 不记录异常文本、HTTP响应或认证信息。
-                  print('诊断未完成，异常类型:', type(error).__name__)
+                  print('单条修复未完成，异常类型:', type(error).__name__)
                   result = 1
               raise SystemExit(result)
           PY
+      - name: 保存单条海拔修复回执
+        if: always()
+        run: |
+          git config user.name 'GitHub Action'
+          git config user.email 'action@github.com'
+          git add activities/keep2runalyze.json
+          if ! git diff --cached --quiet; then
+            git commit -m '保存11月8日海拔补充处理回执'
+            git pull --rebase origin master
+            git push origin HEAD:master
+          fi
