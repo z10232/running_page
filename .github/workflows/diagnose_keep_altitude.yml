@@ -24,10 +24,12 @@ jobs:
           python -u - <<'PY'
           """单条 Keep 记录的结构诊断，只输出字段类型及数量。"""
           
+          import gzip
           import json
           import os
           import re
           import sys
+          from urllib.parse import urlsplit
           from pathlib import Path
           
           import requests
@@ -81,14 +83,31 @@ jobs:
                   detail = response['data']
                   print('详情字段结构:', json.dumps(shape(detail), ensure_ascii=False))
                   print('海拔相关字段结构:', json.dumps(altitude_fields(detail), ensure_ascii=False))
-                  response = session.get(GRAPH_API.format(log_id=KEEP_ID), headers=headers,
-                                         params={'itemCount': 1000}, timeout=45)
-                  print('独立图表接口 HTTP:', response.status_code)
-                  if response.status_code != 200:
-                      return 1
-                  payload = response.json()
-                  print('图表接口结构:', json.dumps(shape(payload), ensure_ascii=False))
-                  print('图表海拔字段结构:', json.dumps(altitude_fields(payload), ensure_ascii=False))
+                  raw_url = detail.get('rawDataURL')
+                  if raw_url:
+                      parsed = urlsplit(raw_url)
+                      print('原始数据来源主机:', parsed.hostname)
+                      if parsed.scheme != 'https':
+                          print('原始数据未使用HTTPS，停止。')
+                          return 1
+                      response = session.get(raw_url, timeout=45)
+                      print('原始数据 HTTP:', response.status_code)
+                      print('原始数据内容类型:', response.headers.get('Content-Type', '').split(';')[0])
+                      print('原始数据字节数:', len(response.content))
+                      response.raise_for_status()
+                      body = response.content
+                      if body.startswith(b'\x1f\x8b'):
+                          body = gzip.decompress(body)
+                      raw = json.loads(body)
+                      print('原始数据结构:', json.dumps(shape(raw), ensure_ascii=False))
+                      print('原始海拔字段结构:', json.dumps(altitude_fields(raw), ensure_ascii=False))
+                  for graph_id, label in ((KEEP_ID, '数字ID'), (run_id, '完整ID')):
+                      response = session.get(GRAPH_API.format(log_id=graph_id), headers=headers,
+                                             params={'itemCount': 1000}, timeout=45)
+                      print('独立图表接口', label, 'HTTP:', response.status_code)
+                      payload = response.json()
+                      print('图表接口结构:', json.dumps(shape(payload), ensure_ascii=False))
+                      print('图表海拔字段结构:', json.dumps(altitude_fields(payload), ensure_ascii=False))
               return 0
           
           
