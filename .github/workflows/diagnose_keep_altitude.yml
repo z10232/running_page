@@ -88,24 +88,27 @@ jobs:
                   print('独立图表接口 HTTP:', response.status_code)
                   response.raise_for_status()
                   charts = response.json()['data']['charts']
-                  for chart in charts:
-                      metadata = {key: chart.get(key) for key in ('title','chartMetaType','unit','chartType','gridType')}
-                      print('图表元数据:', json.dumps(metadata, ensure_ascii=False))
-                      encoded = chart.get('chartData')
-                      if not encoded:
-                          continue
-                      try:
-                          decoded = decode_runmap_data(encoded)
-                      except Exception as error:
-                          print('图表解码失败类型:', type(error).__name__)
-                          continue
-                      print('图表采样结构:', json.dumps(shape(decoded), ensure_ascii=False))
-                      if isinstance(decoded, list):
-                          numeric = lambda value: isinstance(value,(int,float)) and not isinstance(value,bool)
-                          points = [point for point in decoded if isinstance(point,dict)]
-                          print('采样字段有效数量:', json.dumps({key:sum(numeric(point.get(key)) for point in points) for key in ('x','y','min','max')}))
-                          ranged = [point for point in points if all(numeric(point.get(key)) for key in ('y','min','max'))]
-                          print('采样数值语义检查:', json.dumps({'y_all_zero': bool(points) and all(point.get('y') == 0 for point in points), 'y_always_in_range': bool(ranged) and all(point['min']<=point['y']<=point['max'] for point in ranged), 'range_all_equal': bool(ranged) and all(point['min']==point['max'] for point in ranged)}))
+                  chart = next(c for c in charts if c.get('chartMetaType')=='upliftedHeight')
+                  points = decode_runmap_data(chart['chartData'])
+                  xs = [point['x'] for point in points]
+                  ys = [point['y'] for point in points]
+                  baseline = detail.get('baselineAltitude')
+                  elapsed = (detail['endTime']-detail['startTime'])/1000
+                  checks = {
+                      'x_starts_at_zero':xs[0]==0,
+                      'x_sorted':xs==sorted(xs),
+                      'x_within_elapsed_seconds':all(0<=x<=elapsed for x in xs),
+                      'last_x_within_15_seconds_of_end':abs(elapsed-xs[-1])<=15,
+                      'height_has_rise':any(b>a for a,b in zip(ys,ys[1:])),
+                      'height_has_fall':any(b<a for a,b in zip(ys,ys[1:])),
+                      'first_y_near_zero':abs(ys[0])<1,
+                      'first_y_near_baseline':baseline is not None and abs(ys[0]-baseline)<1,
+                      'baseline_near_zero':baseline is not None and abs(baseline)<1,
+                      'fit_altitude_range_valid':all(-500<=y<=10000 for y in ys),
+                      'min_max_all_zero':all(p['min']==p['max']==0 for p in points),
+                  }
+                  print('海拔时间与高度语义:',json.dumps(checks,ensure_ascii=False))
+                  print('海拔统计标签:',json.dumps([item.get('label') for key in ('briefLeftNums','briefRightNums','briefNums','flowerBriefNums') for item in (chart.get(key) or []) if isinstance(item,dict)],ensure_ascii=False))
               return 0
           
           
